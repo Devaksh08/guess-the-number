@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Guess the Number - Game</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body class="container mt-5">
+    <h2 class="text-center">Guess the Number - Game</h2>
+    <p>Game ID: {{ game[0] }}</p>
+    <p>Current Turn: <strong>{{ turn_player }}</strong></p>
+    <p>Your Player: <strong>{{ player }}</strong></p>
+
+    {% if message %}
+    <div class="alert alert-warning">{{ message }}</div>
+    {% endif %}
+
+    <form method="POST" class="mb-4">
+        <div class="input-group">
+            <input type="text" class="form-control" name="guess" placeholder="Enter your guess" required>
+            <button type="submit" class="btn btn-success">Submit Guess</button>
+        </div>
+    </form>
+
+    <h4>Guess History</h4>
+    <table class="table table-striped">
+        <thead>
+            <tr>
+                <th>Player</th>
+                <th>Guess</th>
+                <th>✅ Correct</th>
+                <th>🔸 Correct Position</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for h in history %}
+            <tr>
+                <td>{{ h[0] }}</td>
+                <td>{{ h[1] }}</td>
+                <td>{{ h[2] }}</td>
+                <td>{{ h[3] }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</body>
+</html>
