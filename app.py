@@ -146,8 +146,10 @@ def join_game():
 # --------------------------
 @app.route("/secret/<game_code>/<player>", methods=["GET", "POST"])
 def submit_secret(game_code, player):
-    if session.get("player") != player:
+    
+    if "player" not in session or "game_code" not in session:
         return redirect(url_for("home"))
+
 
     message = ""
 
@@ -173,10 +175,11 @@ def submit_secret(game_code, player):
             r = c.fetchone()
             conn.close()
 
-            if r[0] and r[1]:
+            if not player:
+                return "Game not found or expired", 404
+
+            if row[0] == 1 and row[1] == 1:
                 return redirect(url_for("game", game_code=game_code))
-            else:
-                return redirect(url_for("wait_for_opponent", game_code=game_code, player=player))
 
     return render_template("submit_secret.html", player=player, message=message)
 
