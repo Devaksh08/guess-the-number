@@ -5,9 +5,10 @@ import random
 import string
 
 app = Flask(__name__)
-app.secret_key = "supersecretkey"
+app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 
-DB_NAME = os.path.join(os.path.dirname(__file__), "database.db")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, "database.db")
 
 # --------------------------
 # Initialize database
