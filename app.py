@@ -252,10 +252,13 @@ def game(game_code):
 # --------------------------
 # Run app
 # --------------------------
-if __name__ == "__main__":
+@app.before_first_request
+def setup():
     init_db()
-    app.run(debug=True)
 
 @app.route("/healthz")
 def healthz():
     return "OK", 200
+
+if __name__ == "__main__":
+    app.run(debug=True)
