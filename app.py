@@ -172,7 +172,7 @@ def submit_secret(game_code, player):
             conn.commit()
 
             c.execute("SELECT player1_ready, player2_ready FROM games WHERE game_code=?", (game_code,))
-            r = c.fetchone()
+            row = c.fetchone()
             conn.close()
 
             if not player:
