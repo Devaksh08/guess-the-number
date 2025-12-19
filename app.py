@@ -68,7 +68,7 @@ def generate_game_code():
 # --------------------------
 @app.route("/")
 def home():
-    return redirect(url_for("create_game"))
+    return render_template("home.html")
 
 # --------------------------
 # Create Game (Player 1)
