@@ -117,7 +117,7 @@ def wait(game_code):
 
 # ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
-def secret(game_code):
+def submit_secret(game_code):
     if session.get("game_code") != game_code:
         return redirect(url_for("home"))
 
