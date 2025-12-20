@@ -118,41 +118,54 @@ def wait(game_code):
 # ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
 def submit_secret(game_code):
-    if session.get("game_code") != game_code:
-        return redirect(url_for("home"))
+    game = games.get(game_code)
 
-    player = session["player"]
+    if not game:
+        return "Invalid game code", 404
+
+    # Who is this user?
+    player = session.get("player")
+
+    if player not in ["player1", "player2"]:
+        return "Player not recognized", 403
+
+    # 🔒 If this player already submitted → wait
+    if player == "player1" and game["secret1"]:
+        return redirect(url_for("wait_opponent", game_code=game_code))
+
+    if player == "player2" and game["secret2"]:
+        return redirect(url_for("wait_opponent", game_code=game_code))
 
     if request.method == "POST":
-        s = request.form["secret"]
+        secret = request.form.get("secret")
 
-        if not valid_number(s):
-            return render_template("submit_secret.html", player=player, message="Invalid number")
+        # Basic validation
+        if (
+            not secret.isdigit()
+            or len(secret) != 4
+            or "0" in secret
+            or len(set(secret)) != 4
+        ):
+            return render_template(
+                "submit_secret.html",
+                player=player,
+                message="Invalid number. Use 4 unique digits from 1-9."
+            )
 
-        with get_db() as conn:
-            if player == "Player 1":
-                conn.execute("""
-                    UPDATE games SET player1_secret=?, player1_ready=1
-                    WHERE game_code=?
-                """, (s, game_code))
-            else:
-                conn.execute("""
-                    UPDATE games SET player2_secret=?, player2_ready=1
-                    WHERE game_code=?
-                """, (s, game_code))
+        # ✅ SAVE SECRET CORRECTLY
+        if player == "player1":
+            game["secret1"] = secret
+        else:
+            game["secret2"] = secret
 
-            p1, p2 = conn.execute(
-                "SELECT player1_ready, player2_ready FROM games WHERE game_code=?",
-                (game_code,)
-            ).fetchone()
-
-        if p1 and p2:
+        # ✅ If both secrets exist → start game
+        if game["secret1"] and game["secret2"]:
             return redirect(url_for("game", game_code=game_code))
 
-        return render_template("wait_opponent.html", player=player)
+        # Otherwise wait
+        return redirect(url_for("wait_opponent", game_code=game_code))
 
     return render_template("submit_secret.html", player=player)
-
 # ---------- GAME ----------
 @app.route("/game/<game_code>", methods=["GET", "POST"])
 def game(game_code):
