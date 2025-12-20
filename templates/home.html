@@ -2,11 +2,24 @@
 <html>
 <head>
     <title>Guess The Number</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
-    <form action="/create" method="POST">
-    <input type="text" name="player_name" placeholder="Enter your name" required>
-    <button type="submit">Create Game</button>
-</form>
+<body class="container mt-5 text-center">
+    <h2>Welcome to Guess The Number!</h2>
+    <p>Choose your option:</p>
+
+    <div class="d-grid gap-3 mt-4">
+        <!-- Create Game -->
+        <form action="{{ url_for('create_game') }}" method="POST">
+            <input type="text" name="player_name" class="form-control mb-2" placeholder="Enter your name (Player 1)">
+            <button type="submit" class="btn btn-primary btn-lg">Create Game</button>
+        </form>
+
+        <!-- Join Game -->
+        <form action="{{ url_for('join_game') }}" method="GET">
+            <button type="submit" class="btn btn-success btn-lg">Join Game</button>
+        </form>
+    </div>
 </body>
 </html>
