@@ -118,7 +118,7 @@ def wait(game_code):
 # ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
 def submit_secret(game_code):
-    game = games.get(game_code)
+    game = game.get(game_code)
 
     if not game:
         return "Invalid game code", 404
