@@ -111,7 +111,7 @@ def wait(game_code):
         ).fetchone()
 
     if ready and ready[0] == 1:
-        return redirect(url_for("secret", game_code=game_code))
+        return redirect(url_for("submit_secret", game_code=game_code))
 
     return render_template("wait.html", game_code=game_code)
 
