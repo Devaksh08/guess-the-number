@@ -7,240 +7,202 @@ import string
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
 
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))
-DB_NAME = os.path.join(BASE_DIR, "database.db")
+DB = "database.db"
 
-# -------------------------------------------------
-# Database initialization
-# -------------------------------------------------
+# ------------------ DB ------------------
+def get_db():
+    return sqlite3.connect(DB)
+
 def init_db():
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    c.execute("""
+    with get_db() as conn:
+        c = conn.cursor()
+        c.execute("""
         CREATE TABLE IF NOT EXISTS games (
             game_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_code TEXT UNIQUE NOT NULL,
+            game_code TEXT UNIQUE,
             player1_secret TEXT,
             player2_secret TEXT,
             player1_ready INTEGER DEFAULT 0,
             player2_ready INTEGER DEFAULT 0,
             turn INTEGER DEFAULT 1,
             winner TEXT
-        )
-    """)
+        )""")
 
-    c.execute("""
+        c.execute("""
         CREATE TABLE IF NOT EXISTS guesses (
-            guess_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_id INTEGER NOT NULL,
-            player TEXT NOT NULL,
-            guess TEXT NOT NULL,
-            x INTEGER NOT NULL,
-            y INTEGER NOT NULL,
-            FOREIGN KEY (game_id) REFERENCES games(game_id)
-        )
-    """)
-
-    conn.commit()
-    conn.close()
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            game_id INTEGER,
+            player TEXT,
+            guess TEXT,
+            x INTEGER,
+            y INTEGER
+        )""")
 
 init_db()
 
-# -------------------------------------------------
-# Helpers
-# -------------------------------------------------
-def valid_number(num):
-    return (
-        num
-        and len(num) == 4
-        and all(d in "123456789" for d in num)
-        and len(set(num)) == 4
-    )
+# ------------------ HELPERS ------------------
+def valid_number(n):
+    return n and len(n) == 4 and all(d in "123456789" for d in n) and len(set(n)) == 4
 
-def get_feedback(secret, guess):
+def feedback(secret, guess):
     x = sum(d in secret for d in guess)
     y = sum(secret[i] == guess[i] for i in range(4))
     return x, y
 
-def generate_game_code(length=4):
-    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=length))
+def code():
+    return ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-def get_db():
-    return sqlite3.connect(DB_NAME)
-
-# -------------------------------------------------
-# Routes
-# -------------------------------------------------
+# ------------------ ROUTES ------------------
 @app.route("/")
 def home():
+    session.clear()
     return render_template("home.html")
 
-# ---------------- Create Game (Player 1) ----------------
-@app.route("/create", methods=["POST"])
-def create_game():
-    player_name = request.form.get("player_name", "Player 1")
-
-    game_code = generate_game_code()
-    conn = get_db()
-    c = conn.cursor()
-
-    c.execute("INSERT INTO games (game_code) VALUES (?)", (game_code,))
-    conn.commit()
-    conn.close()
-
-    session.clear()
-    session["player"] = "Player 1"
-    session["player_name"] = player_name
-    session["game_code"] = game_code
-
-    return redirect(url_for("wait_for_player2", game_code=game_code))
-
-# ---------------- Join Game (Player 2) ----------------
-@app.route("/join", methods=["GET", "POST"])
-def join_game():
+# ---------- CREATE ----------
+@app.route("/create", methods=["GET", "POST"])
+def create():
     if request.method == "POST":
-        game_code = request.form.get("game_code", "").upper()
-        player_name = request.form.get("player_name", "Player 2")
+        game_code = code()
 
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT game_id FROM games WHERE game_code=?", (game_code,))
-        game = c.fetchone()
-        conn.close()
+        with get_db() as conn:
+            conn.execute("INSERT INTO games (game_code) VALUES (?)", (game_code,))
+
+        session["player"] = "Player 1"
+        session["game_code"] = game_code
+        return redirect(url_for("wait", game_code=game_code))
+
+    return redirect(url_for("home"))
+
+# ---------- JOIN ----------
+@app.route("/join", methods=["GET", "POST"])
+def join():
+    if request.method == "POST":
+        game_code = request.form["game_code"].upper()
+
+        with get_db() as conn:
+            game = conn.execute(
+                "SELECT * FROM games WHERE game_code=?", (game_code,)
+            ).fetchone()
 
         if not game:
-            return render_template("join.html", error="Invalid room code")
+            return render_template("join_game.html", error="Invalid room code")
 
-        session.clear()
         session["player"] = "Player 2"
-        session["player_name"] = player_name
         session["game_code"] = game_code
+        return redirect(url_for("secret", game_code=game_code))
 
-        return redirect(url_for("submit_secret", game_code=game_code))
+    return render_template("join_game.html")
 
-    return render_template("join.html")
-
-# ---------------- Wait for Player 2 ----------------
+# ---------- WAIT FOR PLAYER 2 ----------
 @app.route("/wait/<game_code>")
-def wait_for_player2(game_code):
+def wait(game_code):
     if session.get("player") != "Player 1":
         return redirect(url_for("home"))
+
+    with get_db() as conn:
+        ready = conn.execute(
+            "SELECT player2_ready FROM games WHERE game_code=?",
+            (game_code,)
+        ).fetchone()
+
+    if ready and ready[0] == 1:
+        return redirect(url_for("secret", game_code=game_code))
+
     return render_template("wait.html", game_code=game_code)
 
-# ---------------- Submit Secret ----------------
+# ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
-def submit_secret(game_code):
-    if "player" not in session or session.get("game_code") != game_code:
+def secret(game_code):
+    if session.get("game_code") != game_code:
         return redirect(url_for("home"))
 
     player = session["player"]
-    message = ""
 
     if request.method == "POST":
-        secret = request.form.get("secret")
+        s = request.form["secret"]
 
-        if not valid_number(secret):
-            message = "Invalid number! Use 4 unique digits (1-9)."
-        else:
-            conn = get_db()
-            c = conn.cursor()
+        if not valid_number(s):
+            return render_template("submit_secret.html", player=player, message="Invalid number")
 
+        with get_db() as conn:
             if player == "Player 1":
-                c.execute("""
-                    UPDATE games
-                    SET player1_secret=?, player1_ready=1
+                conn.execute("""
+                    UPDATE games SET player1_secret=?, player1_ready=1
                     WHERE game_code=?
-                """, (secret, game_code))
+                """, (s, game_code))
             else:
-                c.execute("""
-                    UPDATE games
-                    SET player2_secret=?, player2_ready=1
+                conn.execute("""
+                    UPDATE games SET player2_secret=?, player2_ready=1
                     WHERE game_code=?
-                """, (secret, game_code))
+                """, (s, game_code))
 
-            conn.commit()
+            p1, p2 = conn.execute(
+                "SELECT player1_ready, player2_ready FROM games WHERE game_code=?",
+                (game_code,)
+            ).fetchone()
 
-            c.execute("""
-                SELECT player1_ready, player2_ready
-                FROM games WHERE game_code=?
-            """, (game_code,))
-            row = c.fetchone()
-            conn.close()
-
-            if not row:
-                return "Game not found", 404
-
-            if row[0] == 1 and row[1] == 1:
-                return redirect(url_for("game", game_code=game_code))
-            else:
-                return render_template("wait_opponent.html")
-
-    return render_template("secret.html", player=player, message=message)
-
-# ---------------- Main Game ----------------
-@app.route("/game/<game_code>", methods=["GET", "POST"])
-def game(game_code):
-    if "player" not in session or session.get("game_code") != game_code:
-        return redirect(url_for("home"))
-
-    conn = get_db()
-    c = conn.cursor()
-
-    c.execute("SELECT * FROM games WHERE game_code=?", (game_code,))
-    game = c.fetchone()
-    if not game:
-        conn.close()
-        return redirect(url_for("home"))
-
-    game_id = game[0]
-    turn_player = "Player 1" if game[6] % 2 == 1 else "Player 2"
-
-    c.execute("""
-        SELECT player, guess, x, y
-        FROM guesses WHERE game_id=?
-        ORDER BY guess_id
-    """, (game_id,))
-    history = c.fetchall()
-
-    message = ""
-
-    if request.method == "POST":
-        guess = request.form.get("guess")
-
-        if session["player"] != turn_player:
-            message = "Not your turn"
-        elif not valid_number(guess):
-            message = "Invalid guess"
-        else:
-            secret = game[2] if turn_player == "Player 1" else game[1]
-            x, y = get_feedback(secret, guess)
-
-            c.execute("""
-                INSERT INTO guesses (game_id, player, guess, x, y)
-                VALUES (?, ?, ?, ?, ?)
-            """, (game_id, turn_player, guess, x, y))
-
-            if y == 4:
-                c.execute("""
-                    UPDATE games SET winner=?
-                    WHERE game_id=?
-                """, (turn_player, game_id))
-                conn.commit()
-                conn.close()
-                return render_template(
-                    "winner.html",
-                    winner=turn_player,
-                    secret1=game[1],
-                    secret2=game[2]
-                )
-
-            c.execute("UPDATE games SET turn=turn+1 WHERE game_id=?", (game_id,))
-            conn.commit()
-            conn.close()
+        if p1 and p2:
             return redirect(url_for("game", game_code=game_code))
 
-    conn.close()
+        return render_template("wait_opponent.html", player=player)
+
+    return render_template("submit_secret.html", player=player)
+
+# ---------- GAME ----------
+@app.route("/game/<game_code>", methods=["GET", "POST"])
+def game(game_code):
+    if session.get("game_code") != game_code:
+        return redirect(url_for("home"))
+
+    with get_db() as conn:
+        game = conn.execute(
+            "SELECT * FROM games WHERE game_code=?", (game_code,)
+        ).fetchone()
+
+        history = conn.execute(
+            "SELECT player, guess, x, y FROM guesses WHERE game_id=?",
+            (game[0],)
+        ).fetchall()
+
+    turn_player = "Player 1" if game[6] % 2 == 1 else "Player 2"
+    message = ""
+
+    if request.method == "POST":
+        if session["player"] != turn_player:
+            message = "Not your turn"
+        else:
+            guess = request.form["guess"]
+            if not valid_number(guess):
+                message = "Invalid guess"
+            else:
+                secret = game[2] if turn_player == "Player 1" else game[1]
+                x, y = feedback(secret, guess)
+
+                with get_db() as conn:
+                    conn.execute("""
+                        INSERT INTO guesses (game_id, player, guess, x, y)
+                        VALUES (?, ?, ?, ?, ?)
+                    """, (game[0], turn_player, guess, x, y))
+
+                    if y == 4:
+                        conn.execute(
+                            "UPDATE games SET winner=? WHERE game_id=?",
+                            (turn_player, game[0])
+                        )
+                        return render_template(
+                            "winner.html",
+                            winner=turn_player,
+                            secret1=game[1],
+                            secret2=game[2]
+                        )
+
+                    conn.execute(
+                        "UPDATE games SET turn=turn+1 WHERE game_id=?",
+                        (game[0],)
+                    )
+
+        return redirect(url_for("game", game_code=game_code))
+
     return render_template(
         "game.html",
         history=history,
@@ -249,11 +211,10 @@ def game(game_code):
         message=message
     )
 
-# ---------------- Health Check ----------------
+# ---------- HEALTH ----------
 @app.route("/healthz")
 def healthz():
     return "OK", 200
 
-# ---------------- Run locally ----------------
 if __name__ == "__main__":
     app.run(debug=True)
