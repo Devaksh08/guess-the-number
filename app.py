@@ -75,21 +75,26 @@ def create():
 
 # ---------- JOIN ----------
 @app.route("/join", methods=["GET", "POST"])
-def join():
+def join_game():
     if request.method == "POST":
-        game_code = request.form["game_code"].upper()
+        game_code = request.form.get("game_code", "").upper()
+        player_name = request.form.get("player_name", "Player 2")
 
-        with get_db() as conn:
-            game = conn.execute(
-                "SELECT * FROM games WHERE game_code=?", (game_code,)
-            ).fetchone()
+        conn = get_db()
+        c = conn.cursor()
+        c.execute("SELECT game_id FROM games WHERE game_code=?", (game_code,))
+        game = c.fetchone()
+        conn.close()
 
         if not game:
-            return render_template("join_game.html", error="Invalid room code")
+            return render_template("join_game.html", error="Invalid game code!")
 
+        session.clear()
         session["player"] = "Player 2"
+        session["player_name"] = player_name
         session["game_code"] = game_code
-        return redirect(url_for("secret", game_code=game_code))
+
+        return redirect(url_for("submit_secret", game_code=game_code))
 
     return render_template("join_game.html")
 
