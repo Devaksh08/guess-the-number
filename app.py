@@ -210,6 +210,7 @@ def game(game_code):
 
     return render_template(
         "game.html",
+        game_code=game_code,
         history=history,
         turn_player=turn_player,
         player=session["player"],
