@@ -60,7 +60,7 @@ def home():
 
 # ---------- CREATE ----------
 @app.route("/create", methods=["GET", "POST"])
-def create():
+def create_game():
     if request.method == "POST":
         game_code = code()
 
