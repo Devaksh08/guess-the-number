@@ -11,15 +11,16 @@
 
     <div class="d-grid gap-3 mt-4">
         <!-- Create Game -->
-        <form action="{{ url_for('create_game') }}" method="POST">
-            <input type="text" name="player_name" class="form-control mb-2" placeholder="Enter your name (Player 1)">
-            <button type="submit" class="btn btn-primary btn-lg">Create Game</button>
+        <form action="/create" method="POST">
+            <input type="text" name="player_name" placeholder="Your name" required>
+            <button type="submit">Create Game</button>
         </form>
 
-        <!-- Join Game -->
-        <form action="{{ url_for('join_game') }}" method="GET">
-            <button type="submit" class="btn btn-success btn-lg">Join Game</button>
+        <form action="/join" method="POST" class="mt-3">
+            <input type="text" name="game_code" placeholder="Game Code" required>
+            <button type="submit">Join Game</button>
         </form>
+
     </div>
 </body>
 </html>
