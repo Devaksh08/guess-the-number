@@ -16,17 +16,25 @@ def get_db():
 def init_db():
     with get_db() as conn:
         c = conn.cursor()
+
         c.execute("""
         CREATE TABLE IF NOT EXISTS games (
             game_id INTEGER PRIMARY KEY AUTOINCREMENT,
             game_code TEXT UNIQUE,
+
+            player1_name TEXT,
+            player2_name TEXT,
+
             player1_secret TEXT,
             player2_secret TEXT,
+
             player1_ready INTEGER DEFAULT 0,
             player2_ready INTEGER DEFAULT 0,
+
             turn INTEGER DEFAULT 1,
             winner TEXT
-        )""")
+        )
+        """)
 
         c.execute("""
         CREATE TABLE IF NOT EXISTS guesses (
@@ -36,8 +44,8 @@ def init_db():
             guess TEXT,
             x INTEGER,
             y INTEGER
-        )""")
-
+        )
+        """)
 init_db()
 
 # ------------------ HELPERS ------------------
@@ -59,19 +67,23 @@ def home():
     return render_template("home.html")
 
 # ---------- CREATE ----------
-@app.route("/create", methods=["GET", "POST"])
+@app.route("/create", methods=["POST"])
 def create_game():
-    if request.method == "POST":
-        game_code = code()
+    player_name = request.form.get("player_name", "Player 1")
+    game_code = code()
 
-        with get_db() as conn:
-            conn.execute("INSERT INTO games (game_code) VALUES (?)", (game_code,))
+    with get_db() as conn:
+        conn.execute("""
+            INSERT INTO games (game_code, player1_name)
+            VALUES (?, ?)
+        """, (game_code, player_name))
 
-        session["player"] = "Player 1"
-        session["game_code"] = game_code
-        return redirect(url_for("wait", game_code=game_code))
+    session.clear()
+    session["player"] = "Player 1"
+    session["game_code"] = game_code
 
-    return redirect(url_for("home"))
+    return redirect(url_for("wait", game_code=game_code))
+
 
 # ---------- JOIN ----------
 @app.route("/join", methods=["GET", "POST"])
@@ -80,18 +92,23 @@ def join_game():
         game_code = request.form.get("game_code", "").upper()
         player_name = request.form.get("player_name", "Player 2")
 
-        conn = get_db()
-        c = conn.cursor()
-        c.execute("SELECT game_id FROM games WHERE game_code=?", (game_code,))
-        game = c.fetchone()
-        conn.close()
+        with get_db() as conn:
+            game = conn.execute(
+                "SELECT game_id FROM games WHERE game_code=?",
+                (game_code,)
+            ).fetchone()
 
-        if not game:
-            return render_template("join_game.html", error="Invalid game code!")
+            if not game:
+                return render_template("join_game.html", error="Invalid game code!")
+
+            conn.execute("""
+                UPDATE games
+                SET player2_name=?
+                WHERE game_code=?
+            """, (player_name, game_code))
 
         session.clear()
         session["player"] = "Player 2"
-        session["player_name"] = player_name
         session["game_code"] = game_code
 
         return redirect(url_for("submit_secret", game_code=game_code))
@@ -180,51 +197,67 @@ def game(game_code):
         return redirect(url_for("home"))
 
     with get_db() as conn:
-        game = conn.execute(
-            "SELECT * FROM games WHERE game_code=?", (game_code,)
-        ).fetchone()
+        game = conn.execute("""
+            SELECT
+                game_id,
+                player1_name,
+                player2_name,
+                player1_secret,
+                player2_secret,
+                turn,
+                winner
+            FROM games
+            WHERE game_code=?
+        """, (game_code,)).fetchone()
 
-        history = conn.execute(
-            "SELECT player, guess, x, y FROM guesses WHERE game_id=?",
-            (game[0],)
-        ).fetchall()
+        history = conn.execute("""
+            SELECT player, guess, x, y
+            FROM guesses
+            WHERE game_id=?
+        """, (game[0],)).fetchall()
 
-    turn_player = "Player 1" if game[6] % 2 == 1 else "Player 2"
+    game_id, p1_name, p2_name, s1, s2, turn, winner = game
+
+    turn_player = p1_name if turn % 2 == 1 else p2_name
+    current_player = session["player"]
+    current_name = p1_name if current_player == "Player 1" else p2_name
+
     message = ""
 
     if request.method == "POST":
-        if session["player"] != turn_player:
+        if current_name != turn_player:
             message = "Not your turn"
         else:
-            guess = request.form["guess"]
+            guess = request.form.get("guess", "")
             if not valid_number(guess):
                 message = "Invalid guess"
             else:
-                secret = game[2] if turn_player == "Player 2" else game[1]
+                secret = s2 if current_player == "Player 1" else s1
                 x, y = feedback(secret, guess)
 
                 with get_db() as conn:
                     conn.execute("""
                         INSERT INTO guesses (game_id, player, guess, x, y)
                         VALUES (?, ?, ?, ?, ?)
-                    """, (game[0], turn_player, guess, x, y))
+                    """, (game_id, current_name, guess, x, y))
 
                     if y == 4:
-                        conn.execute(
-                            "UPDATE games SET winner=? WHERE game_id=?",
-                            (turn_player, game[0])
-                        )
+                        conn.execute("""
+                            UPDATE games SET winner=?
+                            WHERE game_id=?
+                        """, (current_name, game_id))
+
                         return render_template(
                             "winner.html",
-                            winner=turn_player,
-                            secret1=game[1],
-                            secret2=game[2]
+                            winner=current_name,
+                            secret1=s1,
+                            secret2=s2
                         )
 
-                    conn.execute(
-                        "UPDATE games SET turn=turn+1 WHERE game_id=?",
-                        (game[0],)
-                    )
+                    conn.execute("""
+                        UPDATE games SET turn=turn+1
+                        WHERE game_id=?
+                    """, (game_id,))
 
         return redirect(url_for("game", game_code=game_code))
 
@@ -233,7 +266,7 @@ def game(game_code):
         game_code=game_code,
         history=history,
         turn_player=turn_player,
-        player=session["player"],
+        player=current_name,
         message=message
     )
 
