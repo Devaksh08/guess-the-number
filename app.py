@@ -1,300 +1,150 @@
 from flask import Flask, render_template, request, redirect, url_for, session
-import sqlite3
-import os
 import random
 import string
 
 app = Flask(__name__)
-app.secret_key = os.environ.get("SECRET_KEY", "dev-secret")
+app.secret_key = "super-secret-key"
 
-DB = "database.db"
+games = {}
 
-# ------------------ DB ------------------
-def get_db():
-    return sqlite3.connect(DB)
+# ---------------- HELPERS ----------------
 
-def init_db():
-    with get_db() as conn:
-        c = conn.cursor()
-
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS games (
-            game_id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_code TEXT UNIQUE,
-
-            player1_name TEXT,
-            player2_name TEXT,
-
-            player1_secret TEXT,
-            player2_secret TEXT,
-
-            player1_ready INTEGER DEFAULT 0,
-            player2_ready INTEGER DEFAULT 0,
-
-            turn INTEGER DEFAULT 1,
-            winner TEXT
-        )
-        """)
-
-        c.execute("""
-        CREATE TABLE IF NOT EXISTS guesses (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            game_id INTEGER,
-            player TEXT,
-            guess TEXT,
-            x INTEGER,
-            y INTEGER
-        )
-        """)
-init_db()
-
-# ------------------ HELPERS ------------------
-def valid_number(n):
-    return n and len(n) == 4 and all(d in "123456789" for d in n) and len(set(n)) == 4
-
-def feedback(secret, guess):
-    x = sum(d in secret for d in guess)
-    y = sum(secret[i] == guess[i] for i in range(4))
-    return x, y
-
-def code():
+def generate_game_code():
     return ''.join(random.choices(string.ascii_uppercase + string.digits, k=4))
 
-# ------------------ ROUTES ------------------
-@app.route("/")
+def evaluate_guess(secret, guess):
+    correct_position = sum(s == g for s, g in zip(secret, guess))
+    correct_digits = sum(min(secret.count(d), guess.count(d)) for d in set(guess))
+    return correct_digits, correct_position
+
+# ---------------- ROUTES ----------------
+
+@app.route("/", methods=["GET", "POST"])
 def home():
-    session.clear()
+    if request.method == "POST":
+        session.clear()
+        session["player_name"] = request.form["name"]
+        return redirect(url_for("index"))
     return render_template("home.html")
 
-# ---------- CREATE ----------
+@app.route("/index")
+def index():
+    return render_template("index.html")
+
 @app.route("/create", methods=["POST"])
 def create_game():
-    player_name = request.form.get("player_name", "Player 1")
-    game_code = code()
+    game_code = generate_game_code()
 
-    with get_db() as conn:
-        conn.execute("""
-            INSERT INTO games (game_code, player1_name)
-            VALUES (?, ?)
-        """, (game_code, player_name))
+    games[game_code] = {
+        "players": {
+            "P1": {"name": session["player_name"], "secret": None},
+            "P2": {"name": None, "secret": None}
+        },
+        "turn": "P1",
+        "guesses": [],
+        "status": "waiting",  # waiting → secrets → playing → finished
+        "winner": None
+    }
 
-    session.clear()
-    session["player"] = "Player 1"
     session["game_code"] = game_code
+    session["role"] = "P1"
 
     return redirect(url_for("wait", game_code=game_code))
 
-
-# ---------- JOIN ----------
 @app.route("/join", methods=["GET", "POST"])
 def join_game():
     if request.method == "POST":
-        game_code = request.form.get("game_code", "").upper()
-        player_name = request.form.get("player_name", "Player 2")
+        code = request.form["game_code"].upper()
 
-        with get_db() as conn:
-            game = conn.execute(
-                "SELECT game_id FROM games WHERE game_code=?",
-                (game_code,)
-            ).fetchone()
+        if code not in games:
+            return render_template("join_game.html", error="Invalid game code")
 
-            if not game:
-                return render_template("join_game.html", error="Invalid game code!")
+        game = games[code]
+        if game["players"]["P2"]["name"]:
+            return render_template("join_game.html", error="Game already full")
 
-            conn.execute("""
-                UPDATE games
-                SET player2_name=?
-                WHERE game_code=?
-            """, (player_name, game_code))
+        game["players"]["P2"]["name"] = session["player_name"]
+        game["status"] = "secrets"
 
-        session.clear()
-        session["player"] = "Player 2"
-        session["game_code"] = game_code
+        session["game_code"] = code
+        session["role"] = "P2"
 
-        return redirect(url_for("submit_secret", game_code=game_code))
+        return redirect(url_for("submit_secret", game_code=code))
 
     return render_template("join_game.html")
 
-# ---------- WAIT FOR PLAYER 2 ----------
 @app.route("/wait/<game_code>")
 def wait(game_code):
-    if session.get("player") != "Player 1":
-        return redirect(url_for("home"))
-
-    with get_db() as conn:
-        ready = conn.execute(
-            "SELECT player2_ready FROM games WHERE game_code=?",
-            (game_code,)
-        ).fetchone()
-
-    if ready and ready[0] == 1:
+    game = games[game_code]
+    if game["status"] == "secrets":
         return redirect(url_for("submit_secret", game_code=game_code))
-
     return render_template("wait.html", game_code=game_code)
 
-@app.route("/wait_opponent/<game_code>")
-def wait_opponent(game_code):
-    if session.get("game_code") != game_code:
-        return redirect(url_for("home"))
-
-    with get_db() as conn:
-        s1, s2 = conn.execute(
-            "SELECT player1_secret, player2_secret FROM games WHERE game_code=?",
-            (game_code,)
-        ).fetchone()
-
-    # If both secrets submitted → start game
-    if s1 and s2:
-        return redirect(url_for("game", game_code=game_code))
-
-    return render_template(
-        "wait_opponent.html",
-        player=session.get("player")
-    )
-
-
-# ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
 def submit_secret(game_code):
-    player = session.get("player")
+    game = games[game_code]
+    role = session["role"]
 
-    if player not in ["Player 1", "Player 2"]:
-        return redirect(url_for("home"))
-
-    with get_db() as conn:
-        game = conn.execute(
-            "SELECT game_id, player1_secret, player2_secret FROM games WHERE game_code=?",
-            (game_code,)
-        ).fetchone()
-
-    if not game:
-        return "Invalid game code", 404
-
-    game_id, s1, s2 = game
-
-    # 🔒 Already submitted → wait
-    if (player == "Player 1" and s1) or (player == "Player 2" and s2):
-        return redirect(url_for("wait_opponent", game_code=game_code))
+    if game["players"][role]["secret"]:
+        return redirect(url_for("game", game_code=game_code))
 
     if request.method == "POST":
-        secret = request.form.get("secret", "")
+        secret = request.form["secret"]
+        game["players"][role]["secret"] = secret
 
-        if not valid_number(secret):
-            return render_template(
-                "submit_secret.html",
-                player=player,
-                message="Invalid number. Use 4 unique digits from 1-9."
-            )
-
-        with get_db() as conn:
-            if player == "Player 1":
-                conn.execute(
-                    "UPDATE games SET player1_secret=?, player1_ready=1 WHERE game_id=?",
-                    (secret, game_id)
-                )
-            else:
-                conn.execute(
-                    "UPDATE games SET player2_secret=?, player2_ready=1 WHERE game_id=?",
-                    (secret, game_id)
-                )
-
-        # check if both secrets exist
-        with get_db() as conn:
-            ready = conn.execute(
-                "SELECT player1_secret, player2_secret FROM games WHERE game_id=?",
-                (game_id,)
-            ).fetchone()
-
-        if ready[0] and ready[1]:
+        if game["players"]["P1"]["secret"] and game["players"]["P2"]["secret"]:
+            game["status"] = "playing"
             return redirect(url_for("game", game_code=game_code))
 
-        return redirect(url_for("wait_opponent", game_code=game_code))
+    return render_template(
+        "submit_secret.html",
+        player=game["players"][role]["name"]
+    )
 
-    return render_template("submit_secret.html", player=player)
-# ---------- GAME ----------
 @app.route("/game/<game_code>", methods=["GET", "POST"])
 def game(game_code):
-    if session.get("game_code") != game_code:
-        return redirect(url_for("home"))
+    game = games[game_code]
+    role = session["role"]
 
-    with get_db() as conn:
-        game = conn.execute("""
-            SELECT
-                game_id,
-                player1_name,
-                player2_name,
-                player1_secret,
-                player2_secret,
-                turn,
-                winner
-            FROM games
-            WHERE game_code=?
-        """, (game_code,)).fetchone()
+    if game["status"] == "finished":
+        return redirect(url_for("winner", game_code=game_code))
 
-        history = conn.execute("""
-            SELECT player, guess, x, y
-            FROM guesses
-            WHERE game_id=?
-        """, (game[0],)).fetchall()
+    if request.method == "POST" and game["turn"] == role:
+        guess = request.form["guess"]
+        opponent = "P2" if role == "P1" else "P1"
+        secret = game["players"][opponent]["secret"]
 
-    game_id, p1_name, p2_name, s1, s2, turn, winner = game
+        correct, position = evaluate_guess(secret, guess)
 
-    turn_player = p1_name if turn % 2 == 1 else p2_name
-    current_player = session["player"]
-    current_name = p1_name if current_player == "Player 1" else p2_name
+        game["guesses"].append({
+            "player": game["players"][role]["name"],
+            "guess": guess,
+            "correct": correct,
+            "position": position
+        })
 
-    message = ""
-
-    if request.method == "POST":
-        if current_name != turn_player:
-            message = "Not your turn"
+        if position == 4:
+            game["status"] = "finished"
+            game["winner"] = game["players"][role]["name"]
         else:
-            guess = request.form.get("guess", "")
-            if not valid_number(guess):
-                message = "Invalid guess"
-            else:
-                secret = s2 if current_player == "Player 1" else s1
-                x, y = feedback(secret, guess)
-
-                with get_db() as conn:
-                    conn.execute("""
-                        INSERT INTO guesses (game_id, player, guess, x, y)
-                        VALUES (?, ?, ?, ?, ?)
-                    """, (game_id, current_name, guess, x, y))
-
-                    if y == 4:
-                        conn.execute("""
-                            UPDATE games SET winner=?
-                            WHERE game_id=?
-                        """, (current_name, game_id))
-
-                        return render_template(
-                            "winner.html",
-                            winner=current_name,
-                            secret1=s1,
-                            secret2=s2
-                        )
-
-                    conn.execute("""
-                        UPDATE games SET turn=turn+1
-                        WHERE game_id=?
-                    """, (game_id,))
-
-        return redirect(url_for("game", game_code=game_code))
+            game["turn"] = opponent
 
     return render_template(
         "game.html",
-        game_code=game_code,
-        history=history,
-        turn_player=turn_player,
-        player=current_name,
-        message=message
+        game=game,
+        role=role,
+        player_name=game["players"][role]["name"]
     )
 
-# ---------- HEALTH ----------
-@app.route("/healthz")
-def healthz():
-    return "OK", 200
+@app.route("/winner/<game_code>")
+def winner(game_code):
+    game = games[game_code]
+    return render_template(
+        "winner.html",
+        winner=game["winner"],
+        secret1=game["players"]["P1"]["secret"],
+        secret2=game["players"]["P2"]["secret"]
+    )
 
 if __name__ == "__main__":
     app.run(debug=True)
