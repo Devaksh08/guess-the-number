@@ -132,6 +132,27 @@ def wait(game_code):
 
     return render_template("wait.html", game_code=game_code)
 
+@app.route("/wait_opponent/<game_code>")
+def wait_opponent(game_code):
+    if session.get("game_code") != game_code:
+        return redirect(url_for("home"))
+
+    with get_db() as conn:
+        s1, s2 = conn.execute(
+            "SELECT player1_secret, player2_secret FROM games WHERE game_code=?",
+            (game_code,)
+        ).fetchone()
+
+    # If both secrets submitted → start game
+    if s1 and s2:
+        return redirect(url_for("game", game_code=game_code))
+
+    return render_template(
+        "wait_opponent.html",
+        player=session.get("player")
+    )
+
+
 # ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
 def submit_secret(game_code):
