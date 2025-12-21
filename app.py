@@ -118,51 +118,58 @@ def wait(game_code):
 # ---------- SECRET ----------
 @app.route("/secret/<game_code>", methods=["GET", "POST"])
 def submit_secret(game_code):
-    game = game.get(game_code)
+    player = session.get("player")
+
+    if player not in ["Player 1", "Player 2"]:
+        return redirect(url_for("home"))
+
+    with get_db() as conn:
+        game = conn.execute(
+            "SELECT game_id, player1_secret, player2_secret FROM games WHERE game_code=?",
+            (game_code,)
+        ).fetchone()
 
     if not game:
         return "Invalid game code", 404
 
-    # Who is this user?
-    player = session.get("player")
+    game_id, s1, s2 = game
 
-    if player not in ["player1", "player2"]:
-        return "Player not recognized", 403
-
-    # 🔒 If this player already submitted → wait
-    if player == "player1" and game["secret1"]:
-        return redirect(url_for("wait_opponent", game_code=game_code))
-
-    if player == "player2" and game["secret2"]:
+    # 🔒 Already submitted → wait
+    if (player == "Player 1" and s1) or (player == "Player 2" and s2):
         return redirect(url_for("wait_opponent", game_code=game_code))
 
     if request.method == "POST":
-        secret = request.form.get("secret")
+        secret = request.form.get("secret", "")
 
-        # Basic validation
-        if (
-            not secret.isdigit()
-            or len(secret) != 4
-            or "0" in secret
-            or len(set(secret)) != 4
-        ):
+        if not valid_number(secret):
             return render_template(
                 "submit_secret.html",
                 player=player,
                 message="Invalid number. Use 4 unique digits from 1-9."
             )
 
-        # ✅ SAVE SECRET CORRECTLY
-        if player == "player1":
-            game["secret1"] = secret
-        else:
-            game["secret2"] = secret
+        with get_db() as conn:
+            if player == "Player 1":
+                conn.execute(
+                    "UPDATE games SET player1_secret=?, player1_ready=1 WHERE game_id=?",
+                    (secret, game_id)
+                )
+            else:
+                conn.execute(
+                    "UPDATE games SET player2_secret=?, player2_ready=1 WHERE game_id=?",
+                    (secret, game_id)
+                )
 
-        # ✅ If both secrets exist → start game
-        if game["secret1"] and game["secret2"]:
+        # check if both secrets exist
+        with get_db() as conn:
+            ready = conn.execute(
+                "SELECT player1_secret, player2_secret FROM games WHERE game_id=?",
+                (game_id,)
+            ).fetchone()
+
+        if ready[0] and ready[1]:
             return redirect(url_for("game", game_code=game_code))
 
-        # Otherwise wait
         return redirect(url_for("wait_opponent", game_code=game_code))
 
     return render_template("submit_secret.html", player=player)
@@ -193,7 +200,7 @@ def game(game_code):
             if not valid_number(guess):
                 message = "Invalid guess"
             else:
-                secret = game[2] if turn_player == "Player 1" else game[1]
+                secret = game[2] if turn_player == "Player 2" else game[1]
                 x, y = feedback(secret, guess)
 
                 with get_db() as conn:
